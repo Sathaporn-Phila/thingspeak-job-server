@@ -1,0 +1,11 @@
+project/Weather/.pio
+project/Weather/.vscode/.browse.c_cpp.db*
+project/Weather/.vscode/c_cpp_properties.json
+project/Weather/.vscode/launch.json
+project/Weather/.vscode/ipch
+
+project/Weather/src/mqtt_secrets.h
+project/Weather/src/ap_secrets.h
+
+server/node_modules
+server/package-lock.json
