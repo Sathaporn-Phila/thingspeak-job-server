@@ -66,8 +66,7 @@ void loop() {
   int topic_len = topic.length() + 1;
   char topicSend[topic_len];
   topic.toCharArray(topicSend,topic_len);
-  String distinct = "กรุงเทพ";
-  String dataSend = "field1=" + String(val) + "&field2=" + distinct+"&status=MQTTPUBLISH";
+  String dataSend = "field1=" + String(val)+"&status=MQTTPUBLISH";
   int str_len = dataSend.length() + 1;
   char fieldData[str_len];
   dataSend.toCharArray(fieldData,str_len);

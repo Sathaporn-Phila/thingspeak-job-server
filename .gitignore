@@ -4,8 +4,11 @@ project/Weather/.vscode/c_cpp_properties.json
 project/Weather/.vscode/launch.json
 project/Weather/.vscode/ipch
 
+
 project/Weather/src/mqtt_secrets.h
 project/Weather/src/ap_secrets.h
+project/.gitignore
 
 server/node_modules
 server/package-lock.json
+server/.env
