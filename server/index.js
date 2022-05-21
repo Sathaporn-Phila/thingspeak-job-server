@@ -1,10 +1,14 @@
 var express = require('express')
 var bodyParser = require('body-parser')
-const request = require('request')
+//const request = require('request')
 var cron = require('node-cron');
 var app = express();
 var mqtt = require('mqtt');
 var mysql = require("mysql");
+const cluster = require('cluster');
+// Check the number of available CPU.
+const numCPUs = require('os').cpus().length;
+var router = express.Router();
 require('dotenv').config()
 // Your Channel access token (long-lived) 
 const CH_ACCESS_TOKEN = 'uvcXHrNx3zpXG97Fg9+tMj0ozEVTw80+7IuOJZDO03pH7c9WosPhJ7RbYh5IJQpen2tbx5g4sYPG2bSZdsTYs/EycE2ZgLNS8+ByPPWaRwbey9452XWER8WNsShmtidqskn5r+EIHcWn00DFUj9fEAdB04t89/1O/w1cDnyilFU=';
@@ -12,9 +16,9 @@ const CH_ACCESS_TOKEN = 'uvcXHrNx3zpXG97Fg9+tMj0ozEVTw80+7IuOJZDO03pH7c9WosPhJ7R
 class DB{
   constructor(){
       this.conn = mysql.createConnection({
-        host: "eyvqcfxf5reja3nv.cbetxkdyhwsb.us-east-1.rds.amazonaws.com",
+        host: "localhost",
         port: 3306,
-        user: "vpaujh2dm6th5y6p",
+        user: "root",
         password: process.env.DB_PASS,
         database: "phkoi2j2pdfzxsid"
       })
@@ -26,10 +30,10 @@ class DB{
       resolve(result)})
     })
   }
-  insertPerson(uid){
-    let person = new Promise ((resolve,reject)=>{this.conn.query('INSERT INTO user_info(uid,open_noti,schedule_min,schedule_hour) VALUES ("'+uid+'",true,5,NULL)',(err,result,field)=>{
+  insertPerson(uid,temp,province,second=null,min=null,hour=null,noti=true){
+    let person = new Promise ((resolve,reject)=>{this.conn.query('INSERT INTO user_info(uid,open_noti,temp,province,schedule_second,schedule_min,schedule_hour) VALUES ("'+uid+'",'+noti+','+temp+',"'+province+'",'+second+','+min+','+hour+')'),(err,result,field)=>{
       if(err) throw err
-      resolve(result)})
+      resolve(result)}
     })
   }
   async setTask(){
@@ -37,22 +41,35 @@ class DB{
     if(userData.length > 0){
       for(let user of userData){
         if(user.uid){
-          let userTask = new Task(user.schedule_min,schedule.hour,user.open_noti,user.uid)
-          schedule[user.uid] = userTask
+          let userTask = new Task(user.uid,user.temp,user.province,user.open_noti,user.schedule_second,user.schedule_min,schedule.hour)
+          let province = user.province
+          if(schedule.hasOwnProperty(user.uid)){
+            schedule[user.uid][province] = userTask
+          }else
+            schedule[user.uid] = {[province]:userTask}
+          }
         }
       } 
     }
-  }
-  async manage_notification(uid,status,schedule_min=null,schedule_hour=null){
+  
+  async manage_notification(uid,temp,province,status="",schedule_second=null,schedule_min=null,schedule_hour=null){
     if(status=="1" || status == "0"){
       let update = new Promise ((resolve,reject)=>{
-        this.conn.query("UPDATE user_info SET open_noti="+status+" WHERE uid='"+uid+"'" ,(err,result,field)=>{
+        this.conn.query("UPDATE user_info SET open_noti="+status+" WHERE uid='"+uid+"' AND province='"+province+"'",(err,result,field)=>{
         if(err) throw err
         resolve(result)})
       })
     }else if(status == "change_time"){
+        let update = new Promise ((resolve,reject)=>{
+          this.conn.query("UPDATE user_info SET schedule_second="+schedule_second+",schedule_min="+schedule_min+",schedule_hour="+schedule_hour+" WHERE uid='"+uid+"' AND province='"+province+"'" ,(err,result,field)=>{
+          if(err) throw err
+          resolve(result)})
+        })
+    }
+    else if(status == "change_temp"){
+      console.log(temp)
       let update = new Promise ((resolve,reject)=>{
-        this.conn.query("UPDATE user_info SET schedule_min='"+schedule_min+"',schedule_hour='"+schedule_hour+"' WHERE uid='"+uid+"'" ,(err,result,field)=>{
+        this.conn.query("UPDATE user_info SET temp="+temp+" WHERE uid='"+uid+"'AND province='"+`${province}'` ,(err,result,field)=>{
         if(err) throw err
         resolve(result)})
       })
@@ -60,11 +77,14 @@ class DB{
   }
 }
 class Task{
-  constructor(min=null,hour=null,stat=false,uid){
+  constructor(uid,temp,province,stat=false,second=null,min=null,hour=null){
+    this.second = second
     this.min = min
     this.hour = hour
     this.uid = uid
-    this.main_task = this.setJob(this.min,this.hour)
+    this.province = province
+    this.condition_temp = temp
+    this.main_task = this.setJob(this.second,this.min,this.hour)
     if(stat){
       this.main_task.start()
     }
@@ -72,34 +92,34 @@ class Task{
       this.main_task.stop()
     }
   }
-  setStringTime(min,hour){
-    if(min){
+  setStringTime(second,min,hour){
+    if(second){
+      return `${'*/'+second} * * * * *`
+    }
+    else if(min){
       return `${'*/'+min} * * * *`
     } else if(hour){
       return `* ${'*/'+hour} * * *`
     }
   }
-  setJob(min,hour){
+  setJob(second,min,hour){
       try{
-        return cron.schedule(this.setStringTime(min,hour),()=>{
-          this.notify(this.uid)
+        return cron.schedule(this.setStringTime(second,min,hour),()=>{
+          this.notify(this.uid,this.province)
         },{schedule:false})
       } catch(err){
         console.error(err)
       }
   }
   notify(uid){
-    let data = {
-      to: uid,
-      messages: []
+    if(temp[this.province] >= this.condition_temp){
+      let data = {
+        to: uid,
+        messages: [{type:'text',text:`ขณะนี้อุณหภูมิที่ ${this.province} อยู่ที่ ${temp[this.province]}`}]
+      }
+      console.log(data)
     }
-    Object.keys(temp).forEach((distinct) => {
-      data.messages.push({
-        type: 'text',
-        text: 'อุณหภูมิ'+distinct+' ณ ตอนนี้อยู่ที่ '+temp[distinct]
-      })
-    });
-    request({
+    /*request({
       headers: {
         'Content-Type': 'application/json',
         'Authorization': 'Bearer '+CH_ACCESS_TOKEN+''
@@ -112,7 +132,7 @@ class Task{
       if (err) console.log('error')
       if (res) console.log('success')
       if (body) console.log(body)
-    })
+    })*/
   }
   manageJob(status){
     if(status=="1"){
@@ -124,11 +144,12 @@ class Task{
       console.log("Task stop")
     }
   }
-  change_time(min=null,hour=null){
+  change_time(second=null,min=null,hour=null){
     this.main_task.stop()
+    this.second = second
     this.min = min
     this.hour = hour
-    this.main_task = this.setJob(this.min,this.hour)
+    this.main_task = this.setJob(this.second,this.min,this.hour)
     this.main_task.start()
   }
 }
@@ -164,58 +185,125 @@ app.set('port', (process.env.PORT || 3000))
 app.use(bodyParser.urlencoded({extended: true}))
 app.use(bodyParser.json())
 
+app.post('/noti/config_notify',async(req,res)=>{
+  /*{
+    "uid":"r",
+    "status":"1"
+    "province":"กรุงเทพ"
+  }*/
+  this.sender = req.body.uid
+  this.stat = req.body.status
+  if(this.stat == "1" || this.stat == "0"){ //เปิดหรือปิดแจ้งเตือน
+    if(req.body.province!="ทุกจังหวัด"){
+      schedule[this.sender][req.body.province].manageJob(this.stat)
+      usr.manage_notification(this.sender,null,province=req.body.province,this.stat)
+    }
+    else{
+      Object.keys(schedule[this.sender]).forEach((province)=>{
+        schedule[this.sender][province].manageJob(this.stat)
+        usr.manage_notification(this.sender,null,province,this.stat)
+      })
+    }
+  }
+  res.status(200)
+})
+app.post('/noti/config_time',async(req,res)=>{
+  /*{
+    "uid":"r",
+    "time":7
+    "unit":วินาที
+    "province":"กรุงเทพ"
+  }*/
 
-app.get('/:distinct', async(req, res) => {
-  req.acceptsLanguages('th','en')
-  if(req.params["distinct"]=='bangkok'){
-    body_data = temp['กรุงเทพ']
-    res.json(body_data)
-  }
-  else if(req.params["distinct"]=='nakhonpathom'){
-    body_data = temp['นครปฐม']
-    res.json(body_data)
-  }
-  else if(req.params["distinct"]=='getall'){
-    body_data = temp
-    res.json(body_data)
+  this.sender = req.body.uid
+  if(req.body.province!="ทุกจังหวัด"){
+    if(req.body.unit=="วินาที"){
+      schedule[this.sender][req.body.province].change_time(second=req.body.time)
+      usr.manage_notification(this.sender,null,province=req.body.province,status="change_time",second=req.body.time)
+    }
+    else if(req.body.unit=="นาที"){
+      schedule[this.sender][req.body.province].change_time(second=null,min=req.body.time)
+      usr.manage_notification(this.sender,null,province=req.body.province,status="change_time",second=null,min=req.body.time)
+    }
+    else if(req.body.unit=="ชั่วโมง"){
+      schedule[this.sender][req.body.province].change_time(second=null,min=null,hour=req.body.time)
+      usr.manage_notification(this.sender,null,province=req.body.province,status="change_time",second=null,min=null,hour=req.body.time)
+    }
   }
   else{
-    res.sendStatus(404)
-  }
-})
-app.post('/person/insert',async(req,res)=>{ //เพิ่มคนใน db เมื่อใส่ข้อความครั้งแรก
-  this.sender = req.body.events[0].source.userId
-  try{
-    usr.insertPerson(this.sender);
-  }finally{
-    schedule[this.sender]=new Task(5,null,true)
-  }
-  res.status(200)
-});
-app.post('/noti/:status',async(req,res)=>{
-  req.acceptsLanguages('th','en')
-  this.sender = req.body.events[0].source.userId
-  this.stat = req.params["status"]
-  if(this.stat == "1" || this.stat == "0"){ //เปิดหรือปิดแจ้งเตือน
-    schedule[this.sender].manageJob(this.stat)
-    usr.manage_notification(this.sender,this.stat)
-  }
-  else if(this.stat == "change_time"){ //เปลี่ยนเวลาแจ้งเตือน
-    this.message = req.body.events[0].message.text
-    if(this.message.search("นาที")!=-1){
-      t_min = this.message.match(/\d+/g)[0]
-      usr.manage_notification(this.sender,this.stat,schedule_min=t_min)
-      schedule[this.sender].change_time(min=t_min)
-    }
-    else if (this.message.search("ชั่วโมง")!=-1){
-      t_hour = this.message.match(/\d+/g)[0]
-      usr.manage_notification(this.sender,this.stat,schedule_hour=t_hour)
-      schedule[this.sender].change_time(hour=t_hour)
-    }
+    Object.keys(schedule[this.sender]).forEach((province)=>{
+      if(req.body.unit=="วินาที"){
+        schedule[this.sender][province].change_time(second=req.body.time)
+        usr.manage_notification(this.sender,null,province,status="change_time",second=req.body.time)
+      }
+      else if(req.body.unit=="นาที"){
+        schedule[this.sender][province].change_time(second=null,min=req.body.time)
+        usr.manage_notification(this.sender,null,province,status="change_time",second=null,min=req.body.time)
+      }
+      else if(req.body.unit=="ชั่วโมง"){
+        schedule[this.sender][province].change_time(second=null,min=null,hour=req.body.time)
+        usr.manage_notification(this.sender,null,province,status="change_time",second=null,min=null,hour=req.body.time)
+      }
+    })
   }
   res.status(200)
 })
 
+app.post('/noti/config_temp',async(req,res)=>{
+  /*{
+    "uid":"r",
+    "temp":32.5
+    "province":"กรุงเทพ"
+  }*/
+  this.sender = req.body.uid
+  if(req.body.province!=="ทุกจังหวัด"){
+      schedule[this.sender][req.body.province].condition_temp = req.body.temp
+      usr.manage_notification(this.sender,req.body.temp,province=req.body.province,status="change_temp")
+  }
+  else{
+    Object.keys(schedule[this.sender]).forEach((province)=>{
+      schedule[this.sender][province].condition_temp = req.body.temp
+      usr.manage_notification(this.sender,req.body.temp,province,status="change_temp")
+    })
+  }
+  res.status(200)
+})
+app.post('/noti/set',async(req,res)=>{
+  /*
+  {
+    "uid":"r",
+    "time":5,
+    "unit":"นาที"
+    "temp":32.5
+    "province":"กรุงเทพ"
+  }
+  */
+  if(schedule.hasOwnProperty(req.body.uid)){
+    if(req.body.unit=="วินาที"){
+      usr.insertPerson(uid=req.body.uid,req.body.temp,province=req.body.province,second=req.body.time)
+      schedule[req.body.uid][req.body.province] = new Task(uid=req.body.uid,req.body.temp,province=req.body.province,stat=true,second=req.body.time)
+    }else if(req.body.unit=="นาที"){
+      usr.insertPerson(req.body.uid,req.body.temp,province=req.body.province,second=null,min=req.body.time)
+      schedule[req.body.uid][req.body.province] = new Task(uid=req.body.uid,req.body.temp,province=req.body.province,stat=true,second=null,min=req.body.time)
+    }else if(req.body.unit=="ชั่วโมง"){
+      usr.insertPerson(req.body.uid,req.body.temp,province=req.body.province,hour=req.body.time,)
+      schedule[req.body.uid][req.body.province] = new Task(uid=req.body.uid,req.body.temp,province=req.body.province,stat=true,second=null,min=null,hour=req.body.time)
+    }
+  }else{
+    let province = req.body.province
+    if(req.body.unit=="วินาที"){
+      usr.insertPerson(req.body.uid,req.body.temp,province=req.body.province,second=req.body.time)
+      schedule[req.body.uid] == {province:new Task(uid=req.body.uid,req.body.temp,province=req.body.province,stat=true,second=req.body.time)}
+    }else if(req.body.unit=="นาที"){
+      usr.insertPerson(req.body.uid,req.body.temp,province=req.body.province,second=null,min=req.body.time)
+      schedule[req.body.uid] =={province:new Task(uid=req.body.uid,req.body.temp,province=req.body.province,stat=true,second=null,min=req.body.time)}
+    }else if(req.body.unit="ชั่วโมง"){
+      usr.insertPerson(req.body.uid,req.body.temp,province=req.body.province,second=null,min=null,hour=req.body.time,)
+      schedule[req.body.uid]= {province:new Task(uid=req.body.uid,req.body.temp,province=req.body.province,stat=true,second=null,min=null,hour=req.body.time)}
+    }
+  }
+  res.status(200)
+})
 var temp = {}
 let setTemp = (data)=>{
   if(data['field']=='field1'){
@@ -238,7 +326,17 @@ client.on('connect', function() { // When connected
       })
   });
 });
-app.listen(app.get('port'), function () {
-  console.log('run at port', app.get('port'))
-})
+/*if(cluster.isMaster) {
+  for (let i = 0; i < numCPUs; i++) {
+    cluster.fork();
+  }
+  cluster.on('exit', (worker, code, signal) => {
+    console.log(`worker ${worker.process.pid} died`);
+  });
+}
+else{*/
+  app.listen(app.get('port'), function () {
+    console.log('run at port', app.get('port'))
+  })
+//}
 
