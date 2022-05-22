@@ -1,11 +1,12 @@
 var express = require('express')
 var bodyParser = require('body-parser')
-//const request = require('request')
+const request = require('request')
 var cron = require('node-cron');
 var app = express();
 var mqtt = require('mqtt');
 var mysql = require("mysql");
 const cluster = require('cluster');
+const { nextTick } = require('process');
 // Check the number of available CPU.
 const numCPUs = require('os').cpus().length;
 var router = express.Router();
@@ -16,9 +17,9 @@ const CH_ACCESS_TOKEN = 'uvcXHrNx3zpXG97Fg9+tMj0ozEVTw80+7IuOJZDO03pH7c9WosPhJ7R
 class DB{
   constructor(){
       this.conn = mysql.createConnection({
-        host: "localhost",
+        host: "eyvqcfxf5reja3nv.cbetxkdyhwsb.us-east-1.rds.amazonaws.com",
         port: 3306,
-        user: "root",
+        user: "vpaujh2dm6th5y6p",
         password: process.env.DB_PASS,
         database: "phkoi2j2pdfzxsid"
       })
@@ -67,7 +68,6 @@ class DB{
         })
     }
     else if(status == "change_temp"){
-      console.log(temp)
       let update = new Promise ((resolve,reject)=>{
         this.conn.query("UPDATE user_info SET temp="+temp+" WHERE uid='"+uid+"'AND province='"+`${province}'` ,(err,result,field)=>{
         if(err) throw err
@@ -112,27 +112,24 @@ class Task{
       }
   }
   notify(uid){
-    if(temp[this.province] >= this.condition_temp){
+      console.log(schedule)
       let data = {
-        to: uid,
-        messages: [{type:'text',text:`ขณะนี้อุณหภูมิที่ ${this.province} อยู่ที่ ${temp[this.province]}`}]
+        userId : uid,
+        messages: `ขณะนี้อุณหภูมิที่ ${this.province} อยู่ที่ ${temp[this.province]}`
       }
-      console.log(data)
-    }
-    /*request({
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer '+CH_ACCESS_TOKEN+''
-      },
-      url: 'https://api.line.me/v2/bot/message/push',
-      method: 'POST',
-      body: data,
-      json: true
-    }, function (err, res, body) {
-      if (err) console.log('error')
-      if (res) console.log('success')
-      if (body) console.log(body)
-    })*/
+      request({
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        url: 'https://shielded-retreat-51765.herokuapp.com/line/push',
+        method: 'POST',
+        body: data,
+        json:true
+      }, function (err, res, body) {
+        if (err) console.log('error')
+        if (res) console.log('success')
+        if (body) console.log(body)
+      })
   }
   manageJob(status){
     if(status=="1"){
@@ -151,6 +148,9 @@ class Task{
     this.hour = hour
     this.main_task = this.setJob(this.second,this.min,this.hour)
     this.main_task.start()
+  }
+  destroy(){
+    this.main_task.destroy()
   }
 }
 
@@ -185,7 +185,7 @@ app.set('port', (process.env.PORT || 3000))
 app.use(bodyParser.urlencoded({extended: true}))
 app.use(bodyParser.json())
 
-app.post('/noti/config_notify',async(req,res)=>{
+app.post('/noti/config_notify',async(req,res,next)=>{
   /*{
     "uid":"r",
     "status":"1"
@@ -193,19 +193,28 @@ app.post('/noti/config_notify',async(req,res)=>{
   }*/
   this.sender = req.body.uid
   this.stat = req.body.status
-  if(this.stat == "1" || this.stat == "0"){ //เปิดหรือปิดแจ้งเตือน
-    if(req.body.province!="ทุกจังหวัด"){
-      schedule[this.sender][req.body.province].manageJob(this.stat)
-      usr.manage_notification(this.sender,null,province=req.body.province,this.stat)
+  try{
+    if(this.stat == "1" || this.stat == "0"){ //เปิดหรือปิดแจ้งเตือน
+      if(req.body.province!="ทุกจังหวัด"){
+        schedule[this.sender][req.body.province].manageJob(this.stat)
+        usr.manage_notification(this.sender,null,province=req.body.province,this.stat)
+      }
+      else{
+        Object.keys(schedule[this.sender]).forEach((province)=>{
+          schedule[this.sender][province].manageJob(this.stat)
+          usr.manage_notification(this.sender,null,province,this.stat)
+        })
+      }
     }
-    else{
-      Object.keys(schedule[this.sender]).forEach((province)=>{
-        schedule[this.sender][province].manageJob(this.stat)
-        usr.manage_notification(this.sender,null,province,this.stat)
-      })
-    }
+    res.json(req.body)
+    res.status(200)
+  }catch(err){
+    console.log(err)
+    next(err)
+    res.status(500).send('Something broke!')
   }
-  res.status(200)
+  
+  
 })
 app.post('/noti/config_time',async(req,res)=>{
   /*{
@@ -226,9 +235,11 @@ app.post('/noti/config_time',async(req,res)=>{
       usr.manage_notification(this.sender,null,province=req.body.province,status="change_time",second=null,min=req.body.time)
     }
     else if(req.body.unit=="ชั่วโมง"){
+      
       schedule[this.sender][req.body.province].change_time(second=null,min=null,hour=req.body.time)
       usr.manage_notification(this.sender,null,province=req.body.province,status="change_time",second=null,min=null,hour=req.body.time)
     }
+    
   }
   else{
     Object.keys(schedule[this.sender]).forEach((province)=>{
@@ -246,6 +257,7 @@ app.post('/noti/config_time',async(req,res)=>{
       }
     })
   }
+  res.json(req.body)
   res.status(200)
 })
 
@@ -266,6 +278,7 @@ app.post('/noti/config_temp',async(req,res)=>{
       usr.manage_notification(this.sender,req.body.temp,province,status="change_temp")
     })
   }
+  res.json(req.body)
   res.status(200)
 })
 app.post('/noti/set',async(req,res)=>{
@@ -278,20 +291,41 @@ app.post('/noti/set',async(req,res)=>{
     "province":"กรุงเทพ"
   }
   */
+  console.log(res.body)
+  this.sender = req.body.uid
   if(schedule.hasOwnProperty(req.body.uid)){
-    if(req.body.unit=="วินาที"){
-      usr.insertPerson(uid=req.body.uid,req.body.temp,province=req.body.province,second=req.body.time)
-      schedule[req.body.uid][req.body.province] = new Task(uid=req.body.uid,req.body.temp,province=req.body.province,stat=true,second=req.body.time)
-    }else if(req.body.unit=="นาที"){
-      usr.insertPerson(req.body.uid,req.body.temp,province=req.body.province,second=null,min=req.body.time)
-      schedule[req.body.uid][req.body.province] = new Task(uid=req.body.uid,req.body.temp,province=req.body.province,stat=true,second=null,min=req.body.time)
-    }else if(req.body.unit=="ชั่วโมง"){
-      usr.insertPerson(req.body.uid,req.body.temp,province=req.body.province,hour=req.body.time,)
-      schedule[req.body.uid][req.body.province] = new Task(uid=req.body.uid,req.body.temp,province=req.body.province,stat=true,second=null,min=null,hour=req.body.time)
+    console.log(req.body.province in schedule[req.body.uid])
+    if(req.body.province in schedule[req.body.uid]){
+      if(req.body.unit=="วินาที"){
+        schedule[this.sender][req.body.province].change_time(second=req.body.time)
+        usr.manage_notification(this.sender,null,province=req.body.province,status="change_time",second=req.body.time)
+      }
+      else if(req.body.unit=="นาที"){
+        schedule[this.sender][req.body.province].change_time(second=null,min=req.body.time)
+        usr.manage_notification(this.sender,null,province=req.body.province,status="change_time",second=null,min=req.body.time)
+      }
+      else if(req.body.unit=="ชั่วโมง"){
+        schedule[this.sender][req.body.province].change_time(second=null,min=null,hour=req.body.time)
+        usr.manage_notification(this.sender,null,province=req.body.province,status="change_time",second=null,min=null,hour=req.body.time)
+      }
+      schedule[this.sender][req.body.province].condition_temp = req.body.temp
+      usr.manage_notification(this.sender,req.body.temp,province=req.body.province,status="change_temp")
+      usr.manage_notification(this.sender,null,province=req.body.province,status="1")
+    }else{
+      if(req.body.unit=="วินาที"){
+        usr.insertPerson(uid=req.body.uid,req.body.temp,province=req.body.province,second=req.body.time)
+        schedule[req.body.uid][req.body.province] = new Task(uid=req.body.uid,req.body.temp,province=req.body.province,stat=true,second=req.body.time)
+      }else if(req.body.unit=="นาที"){
+        usr.insertPerson(req.body.uid,req.body.temp,province=req.body.province,second=null,min=req.body.time)
+        schedule[req.body.uid][req.body.province] = new Task(uid=req.body.uid,req.body.temp,province=req.body.province,stat=true,second=null,min=req.body.time)
+      }else if(req.body.unit=="ชั่วโมง"){
+        usr.insertPerson(req.body.uid,req.body.temp,province=req.body.province,hour=req.body.time,)
+        schedule[req.body.uid][req.body.province] = new Task(uid=req.body.uid,req.body.temp,province=req.body.province,stat=true,second=null,min=null,hour=req.body.time)
+      }
     }
   }else{
     let province = req.body.province
-    if(req.body.unit=="วินาที"){
+    if(req.body.unit=="วินาที"){ 
       usr.insertPerson(req.body.uid,req.body.temp,province=req.body.province,second=req.body.time)
       schedule[req.body.uid] == {province:new Task(uid=req.body.uid,req.body.temp,province=req.body.province,stat=true,second=req.body.time)}
     }else if(req.body.unit=="นาที"){
@@ -302,6 +336,7 @@ app.post('/noti/set',async(req,res)=>{
       schedule[req.body.uid]= {province:new Task(uid=req.body.uid,req.body.temp,province=req.body.province,stat=true,second=null,min=null,hour=req.body.time)}
     }
   }
+  res.json(req.body)
   res.status(200)
 })
 var temp = {}
